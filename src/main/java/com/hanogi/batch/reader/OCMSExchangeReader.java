@@ -27,6 +27,7 @@ import org.apache.http.HttpResponse;
 import org.apache.http.client.HttpClient;
 import org.apache.http.client.methods.HttpGet;
 import org.apache.http.impl.client.HttpClientBuilder;
+import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 import org.slf4j.Logger;
@@ -50,11 +51,13 @@ import com.hanogi.batch.constants.OCMSQueryParams;
 import com.hanogi.batch.dto.Email;
 import com.hanogi.batch.dto.EmailDomainDetails;
 import com.hanogi.batch.dto.EmailHeader;
+import com.hanogi.batch.dto.EmailMessageCopy;
 import com.hanogi.batch.dto.EmailMetadata;
 import com.hanogi.batch.dto.EmailPreferenceMap;
 import com.hanogi.batch.dto.batch.BatchRunDetails;
 import com.hanogi.batch.exceptions.BrillerBatchConnectionException;
 import com.hanogi.batch.exceptions.BrillerBatchDataException;
+import com.hanogi.batch.repositories.EmailMessageCopyRepositry;
 import com.hanogi.batch.services.ICacheService;
 import com.hanogi.batch.utils.bo.EmailMessageData;
 import com.hanogi.batch.utils.bo.OCMSEmailMessage;
@@ -70,8 +73,9 @@ import microsoft.exchange.webservices.data.search.filter.SearchFilter;
 import net.sf.ehcache.Cache;
 
 /**
- * This class will be contain methods to read the mails from 
- * Microsoft online exchange over cloud
+ * This class will be contain methods to read the mails from Microsoft online
+ * exchange over cloud
+ * 
  * @author mayank.agarwal
  *
  */
@@ -90,18 +94,18 @@ public class OCMSExchangeReader implements IEmailReader {
 
 	@Value("${connectionRetryAttems}")
 	private Integer maxRetryConnectionAttempt = 1;
-	
-	
-	//@Value("${connectionTimeOutInSeconds}")
-    private  long timeOutInSeconds = 60l;
 
-	
-	private Map<OCMSExchangeConnectionParams,AuthenticationResult> accessTokenCache = new ConcurrentHashMap<>();
-	
-	
-	public String getAuthenticationTokens(OCMSExchangeConnectionParams connectionParams) 
-														throws BrillerBatchConnectionException {
+	@Autowired
+	private EmailMessageCopyRepositry emailMsgCopyRepo;
 
+	// @Value("${connectionTimeOutInSeconds}")
+	private long timeOutInSeconds = 60l;
+
+	private Map<OCMSExchangeConnectionParams, AuthenticationResult> accessTokenCache = new ConcurrentHashMap<>();
+
+	public String getAuthenticationTokens(OCMSExchangeConnectionParams connectionParams)
+			throws BrillerBatchConnectionException {
+		log.info("Getting access token.");
 		String accessToken = null;
 
 		// Fetch access tokens
@@ -112,66 +116,68 @@ public class OCMSExchangeReader implements IEmailReader {
 			accessToken = authTokenResult.getAccessToken();
 
 			if (StringUtils.isBlank(accessToken)) {
-
-				throw new BrillerBatchConnectionException("Failed to Authenticate the admin user"
-									+ "and hence cannot acquire tokens.",ErrorCodes.AUTHENTICATION_ERROR);
+				log.error("Failed to get access token.");
+				throw new BrillerBatchConnectionException(
+						"Failed to Authenticate the admin user" + "and hence cannot acquire tokens.",
+						ErrorCodes.AUTHENTICATION_ERROR);
 			}
 		}
-		
-		accessTokenCache.put(connectionParams, authTokenResult);
 
+		accessTokenCache.put(connectionParams, authTokenResult);
+		log.info("Access token acquired successfully.");
 		return accessToken;
 
 	}
-	
+
 	@Async("batchProcessorThreadPool")
 	public void readMail(Email email, BatchRunDetails batchRunDetails,
-									  Map<String, ExecutionStatusEnum> emailProcessingStatusMap, Cache cache) {
+			Map<String, ExecutionStatusEnum> emailProcessingStatusMap, Cache cache) {
 		try {
-			
+			log.info("getting connection");
 			// Load Connection Configurations
 			OCMSExchangeConnectionParams connectionParams = populateConnectionParams(email.getObjEmailDomainDetails());
-			
+
 			AuthenticationResult authTokenResult = accessTokenCache.get(connectionParams);
-			
+
 			String accessToken = null;
-			
-			if(null==authTokenResult) {
-				
+
+			if (null == authTokenResult) {
+
 				accessToken = getAuthenticationTokens(connectionParams);
-				
-			}else {
-				
+
+			} else {
+
 				accessToken = authTokenResult.getAccessToken();
-				
-				if(isAuthDataExpired(authTokenResult)) {
-					
+
+				if (isAuthDataExpired(authTokenResult)) {
+					log.error("Access token has been expired.");
 					accessToken = getAuthenticationTokens(connectionParams);
-					
+
 				}
 			}
-			
-			processEmails(email, batchRunDetails, emailProcessingStatusMap,accessToken, cache);
-			
-		}catch (BrillerBatchConnectionException  e) {
 
-			log.error("Connection Error - email address :" + email.getEmailId() + "marked email processing as failed due to" + e.getMessage());
-			
+			processEmails(email, batchRunDetails, emailProcessingStatusMap, accessToken, cache);
+
+		} catch (BrillerBatchConnectionException e) {
+
+			log.error("Connection Error - email address :" + email.getEmailId()
+					+ "marked email processing as failed due to" + e.getMessage());
+
 			emailProcessingStatusMap.put(email.getEmailId(), ExecutionStatusEnum.failure);
 
 		}
-		
+
 	}
-	
+
 	private boolean isAuthDataExpired(AuthenticationResult authData) {
-		
-        return authData.getExpiresOnDate().before(new Date()) ? true : false;
-        
-    }
+
+		return authData.getExpiresOnDate().before(new Date()) ? true : false;
+
+	}
 
 	public void processEmails(Email email, BatchRunDetails batchRunDetails,
-									  Map<String, ExecutionStatusEnum> emailProcessingStatusMap, String accessToken, Cache cache) {
-
+			Map<String, ExecutionStatusEnum> emailProcessingStatusMap, String accessToken, Cache cache) {
+		log.info("Processing mails.");
 		try {
 
 			if (null != email.getObjEmailPreferences()) {
@@ -180,12 +186,12 @@ public class OCMSExchangeReader implements IEmailReader {
 
 				// Reading the standard folders
 				if (null != emailPreferences.getStandardFolders() & emailPreferences.getStandardFolders().size() > 0) {
-
+					log.info("getting mails from standard folders...");
 					List<String> standardFolders = emailPreferences.getStandardFolders();
 
 					for (String folder : standardFolders) {
-
-						extractAndProcessMails(email, batchRunDetails,accessToken,folder,cache);
+						log.info("Mails from folder:" + folder);
+						extractAndProcessMails(email, batchRunDetails, accessToken, folder, cache);
 					}
 
 				}
@@ -197,7 +203,7 @@ public class OCMSExchangeReader implements IEmailReader {
 
 					for (String folder : customFolders) {
 
-						extractAndProcessMails(email, batchRunDetails,accessToken,folder,cache);
+						extractAndProcessMails(email, batchRunDetails, accessToken, folder, cache);
 					}
 				}
 			}
@@ -206,24 +212,26 @@ public class OCMSExchangeReader implements IEmailReader {
 
 			emailProcessingStatusMap.put(email.getEmailId(), ExecutionStatusEnum.Complete);
 
-		} catch (BrillerBatchConnectionException  | BrillerBatchDataException e) {
+		} catch (BrillerBatchConnectionException | BrillerBatchDataException e) {
 
-			log.error("Connection Error - email address :" + email.getEmailId() + "marked email processing as failed due to" + e.getMessage());
-			
+			log.error("Connection Error - email address :" + email.getEmailId()
+					+ "marked email processing as failed due to" + e.getMessage());
+
 			emailProcessingStatusMap.put(email.getEmailId(), ExecutionStatusEnum.failure);
 
 		}
 
 	}
-	
+
 	/**
-	 * Method to read the connection parameters for the Microsoft Exchange
-	 * server from the Database 
+	 * Method to read the connection parameters for the Microsoft Exchange server
+	 * from the Database
+	 * 
 	 * @param objEmailDomainDetails
 	 * @return OCMSExchangeConnectionParams
 	 * @throws BrillerBatchConnectionException
 	 */
-	
+
 	private OCMSExchangeConnectionParams populateConnectionParams(EmailDomainDetails objEmailDomainDetails)
 			throws BrillerBatchConnectionException {
 
@@ -233,42 +241,41 @@ public class OCMSExchangeReader implements IEmailReader {
 
 		if (StringUtils.isNotBlank(objEmailDomainDetails.getEmailServerConfig())) {
 
-			connectionParams = g.fromJson(objEmailDomainDetails.getEmailServerConfig(),OCMSExchangeConnectionParams.class);
-			
+			connectionParams = g.fromJson(objEmailDomainDetails.getEmailServerConfig(),
+					OCMSExchangeConnectionParams.class);
+
 		} else {
-			throw new BrillerBatchConnectionException("Missing Mail Server Connection Parameters for email Domain : "
-															+ objEmailDomainDetails,ErrorCodes.MISSING_CONNECTION_PARAMETERS);
+			throw new BrillerBatchConnectionException(
+					"Missing Mail Server Connection Parameters for email Domain : " + objEmailDomainDetails,
+					ErrorCodes.MISSING_CONNECTION_PARAMETERS);
 		}
 
 		return connectionParams;
 	}
 
-
-	
-	
 	/**
 	 * Method to extract the details of the mail after reading from exchange server.
-	 * This method will also convert the mail data in to standard format that will be
-	 * understood by the batch process
+	 * This method will also convert the mail data in to standard format that will
+	 * be understood by the batch process
+	 * 
 	 * @param folderId
 	 * @param email
 	 * @param exchangeService
 	 * @param batchRunDetails
-	 * @param folder2 
+	 * @param folder2
 	 * @param emailPreferences
 	 * @throws Exception
 	 */
 
-	private void extractAndProcessMails(Email email,BatchRunDetails batchRunDetails,
-										String accessToken, String folder, Cache cache) throws BrillerBatchConnectionException,
-										BrillerBatchDataException{
-		
-		String messageURL = createMessageURL(email,batchRunDetails,folder);
-		
+	private void extractAndProcessMails(Email email, BatchRunDetails batchRunDetails, String accessToken, String folder,
+			Cache cache) throws BrillerBatchConnectionException, BrillerBatchDataException {
+
+		String messageURL = createMessageURL(email, batchRunDetails, folder);
+
 		HttpClient client = HttpClientBuilder.create().build();
-		
+
 		HttpGet post = new HttpGet(messageURL);
-		
+
 		try {
 			post.addHeader("Accept", "application/json");
 			post.addHeader("Prefer", "outlook.body-content-type=text");
@@ -278,93 +285,100 @@ public class OCMSExchangeReader implements IEmailReader {
 
 			log.info("Response Code : " + response.getStatusLine().getStatusCode());
 
-			if (response.getStatusLine().getStatusCode()==(int)200) {
-				
+			if (response.getStatusLine().getStatusCode() == (int) 200) {
+
 				BufferedReader rd = new BufferedReader(new InputStreamReader(response.getEntity().getContent()));
-			 
+
 				StringBuffer result = new StringBuffer();
 				String line = null;
 				while ((line = rd.readLine()) != null) {
 					result.append(line);
 				}
-				
-				
+
 				ObjectMapper objectMapper1 = new ObjectMapper();
-				JSONObject  jsonObject1 = new JSONObject(result.toString());
-				jsonObject1.getJSONArray("value");
+				JSONObject jsonObject1 = new JSONObject(result.toString());
+
+				// Inserted to save email messages to DB
+				JSONArray msgJsonArray = jsonObject1.getJSONArray("value");
+
+				EmailMessageCopy messageCopy = new EmailMessageCopy();
+				messageCopy.setMsgJson(result.toString());
+
+				emailMsgCopyRepo.save(messageCopy);
+
 				objectMapper1.disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
-				
-				TypeReference<List<OCMSEmailMessage>> mapType1 = new TypeReference<List<OCMSEmailMessage>>() {};
-				
-				List<OCMSEmailMessage> messegeList = objectMapper1.readValue(jsonObject1.getJSONArray("value").toString(), mapType1);
-				
-				
+
+				TypeReference<List<OCMSEmailMessage>> mapType1 = new TypeReference<List<OCMSEmailMessage>>() {
+				};
+
+				List<OCMSEmailMessage> messegeList = objectMapper1
+						.readValue(jsonObject1.getJSONArray("value").toString(), mapType1);
+
 				for (OCMSEmailMessage emailMessage : messegeList) {
-					
+
 					EmailMessageData emailMessageData = new EmailMessageData();
-					
+
 					emailMessageData.setEmailBody(emailMessage.getBody().toString());
 					emailMessageData.setUniqueEmailBody(emailMessage.getUniqueBody().getContent());
 					emailMessageData.setEmailDomainName(email.getObjEmailDomainDetails().getEmailDomainName());
 
-					EmailMetadata emailMetaData =
-							extractAndSetEmailMetadata(emailMessage, folder,batchRunDetails);
+					EmailMetadata emailMetaData = extractAndSetEmailMetadata(emailMessage, folder, batchRunDetails);
 
 					emailMessageData.setEmailMetaData(emailMetaData);
-					
+
 					// Update the Cache with the EmailMessage if not already present
 					String MessageId = emailMessageData.getEmailMetaData().getEmailHeader().getMessageId();
 
-					boolean doNotExists = 
-						cacheService.checkAddUpdateCache(MessageId,ExecutionStatusEnum.Inprogress, cache);
+					boolean doNotExists = cacheService.checkAddUpdateCache(MessageId, ExecutionStatusEnum.Inprogress,
+							cache);
 
 					if (!doNotExists) {
 						try {
 							emailDataProcessingQueue.put(emailMessageData);
-							
+
 						} catch (InterruptedException e) {
-							
-							log.error("Error while add the mail message to the procesing Queue : "+ emailMessageData.getMessageDataId(), e);
-							
+
+							log.error("Error while add the mail message to the procesing Queue : "
+									+ emailMessageData.getMessageDataId(), e);
+
 						}
 					}
 				}
-				
-				System.out.println("Complete All the Emails for the mails****************************************************:");
-				
+
+				log.info("Complete All the Emails for the mails****************************************************:");
+
 			}
 		} catch (IOException e) {
-			
+
 			log.error("Error while making connection with exchange server : ", e);
 
-			throw new BrillerBatchConnectionException(
-					"Error while making connection with exchange server ",ErrorCodes.SERVER_CONNECTION_ERROR);
-			
-			
+			throw new BrillerBatchConnectionException("Error while making connection with exchange server ",
+					ErrorCodes.SERVER_CONNECTION_ERROR);
+
 		} catch (JSONException e) {
-			
+
 			log.error("Error while pasring the response to JSON object : ", e);
 
-			throw new BrillerBatchDataException(
-					"Error while pasring the response to JSON object ",ErrorCodes.INCORRECT_RESPONSE);
-			
-		}
-		
-	}
-	
+			throw new BrillerBatchDataException("Error while pasring the response to JSON object ",
+					ErrorCodes.INCORRECT_RESPONSE);
 
-	private String createMessageURL(Email email, BatchRunDetails batchRunDetails,
-										String folder) throws BrillerBatchDataException {
-		
-		StringBuffer sbURL = new StringBuffer();
-		
-		String folderName = WellKnownFolderName.valueOf(folder).name();
-		
-		if(StringUtils.isBlank(folderName)) {
-			throw new BrillerBatchDataException("Incorrect Standard folder name. Could not"
-							+ "Create Graph URL to fetch messages",ErrorCodes.INCORRECT_FOLDER_NAME);
 		}
-		
+
+	}
+
+	private String createMessageURL(Email email, BatchRunDetails batchRunDetails, String folder)
+			throws BrillerBatchDataException {
+
+		StringBuffer sbURL = new StringBuffer();
+
+		String folderName = WellKnownFolderName.valueOf(folder).name();
+
+		if (StringUtils.isBlank(folderName)) {
+			throw new BrillerBatchDataException(
+					"Incorrect Standard folder name. Could not" + "Create Graph URL to fetch messages",
+					ErrorCodes.INCORRECT_FOLDER_NAME);
+		}
+
 		sbURL.append(ApplicationConstant.MS_GRAPH_API_URL.getValue());
 		sbURL.append(email.getEmailId());
 		sbURL.append(ApplicationConstant.MS_GRAPH_URL_SEPARATOR.getValue());
@@ -374,42 +388,40 @@ public class OCMSExchangeReader implements IEmailReader {
 		sbURL.append(ApplicationConstant.MS_GRAPH_URL_SEPARATOR.getValue());
 		sbURL.append(ApplicationConstant.MS_GRAPH_URL_MESSAGES.getValue());
 		sbURL.append(ApplicationConstant.MS_GRAPH_QUERY_SEPARATOR.getValue());
-		//sbURL.append(ApplicationConstant.MS_GRAPH_API_FILTER.getValue());
-		//sbURL.append(ApplicationConstant.MS_GRAPH_RECEIVED_TIME_GREATER_THAN.getValue());
-		//sbURL.append("2018-09-30");
-		//sbURL.append(ApplicationConstant.MS_GRAPH_AND_SEPARATOR.getValue());
-		//sbURL.append(ApplicationConstant.MS_GRAPH_RECEIVED_TIME_LESSER_THAN.getValue());
-		//sbURL.append(batchRunDetails.getToDate());
-		//sbURL.append("2019-03-30");
-		//$filter=ReceivedDateTime ge 2017-04-01 and receivedDateTime lt 2017-05-01
-		//sbURL.append(ApplicationConstant.MS_GRAPH_QUERY_SEPARATOR.getValue());
+		// sbURL.append(ApplicationConstant.MS_GRAPH_API_FILTER.getValue());
+		// sbURL.append(ApplicationConstant.MS_GRAPH_RECEIVED_TIME_GREATER_THAN.getValue());
+		// sbURL.append("2018-09-30");
+		// sbURL.append(ApplicationConstant.MS_GRAPH_AND_SEPARATOR.getValue());
+		// sbURL.append(ApplicationConstant.MS_GRAPH_RECEIVED_TIME_LESSER_THAN.getValue());
+		// sbURL.append(batchRunDetails.getToDate());
+		// sbURL.append("2019-03-30");
+		// $filter=ReceivedDateTime ge 2017-04-01 and receivedDateTime lt 2017-05-01
+		// sbURL.append(ApplicationConstant.MS_GRAPH_QUERY_SEPARATOR.getValue());
 		sbURL.append(ApplicationConstant.MS_GRAPH_API_SELECT.getValue());
-		
-		
+
 		List<String> queryParamList = new ArrayList<>();
-		
+
 		for (OCMSQueryParams queryParam : OCMSQueryParams.values()) {
-			
+
 			queryParamList.add(queryParam.name());
 		}
-		
+
 		sbURL.append(String.join(",", queryParamList));
-		
-		
+
 		return sbURL.toString();
 	}
 
-
 	/**
-	 * Method to set the email meta data from the email data fetched from
-	 * Microsoft exchange server
+	 * Method to set the email meta data from the email data fetched from Microsoft
+	 * exchange server
+	 * 
 	 * @param emailMessage
 	 * @param folderName
 	 * @param batchRunDetails
 	 * @return
 	 */
-	public EmailMetadata extractAndSetEmailMetadata(OCMSEmailMessage emailMessage ,
-										String folderName, BatchRunDetails batchRunDetails)  {
+	public EmailMetadata extractAndSetEmailMetadata(OCMSEmailMessage emailMessage, String folderName,
+			BatchRunDetails batchRunDetails) {
 
 		// Setting up Meta data
 		EmailMetadata emailMetaData = new EmailMetadata();
@@ -430,15 +442,16 @@ public class OCMSExchangeReader implements IEmailReader {
 
 		return emailMetaData;
 	}
-	
+
 	/**
-	 * This method will extract the data from email message object & set the required
-	 * data in the email header object
+	 * This method will extract the data from email message object & set the
+	 * required data in the email header object
+	 * 
 	 * @param emailMessage
 	 * @param folderName
 	 * @return
 	 */
-	public EmailHeader extractAndSetEmailHeader(OCMSEmailMessage emailMessage ,String folderName)  {
+	public EmailHeader extractAndSetEmailHeader(OCMSEmailMessage emailMessage, String folderName) {
 
 		EmailHeader emailHeader = new EmailHeader();
 
@@ -455,13 +468,13 @@ public class OCMSExchangeReader implements IEmailReader {
 			Date emailDate = convertStringToDate(emailMessage.getSentDateTime());
 
 			emailHeader.setEmailDate(emailDate);
-			
+
 			emailHeader.setEmailDirection(EmailDirection.Sent.name());
 		} else {
 			Date emailDate = convertStringToDate(emailMessage.getReceivedDateTime());
 
 			emailHeader.setEmailDate(emailDate);
-			
+
 			emailHeader.setEmailDirection(EmailDirection.Received.name());
 		}
 
@@ -478,31 +491,31 @@ public class OCMSExchangeReader implements IEmailReader {
 
 			emailHeader.setToEmailId(toEmailAddresses);
 		}
-		
+
 		emailHeader.setFromEmailId(emailMessage.getSender().getEmailAddress().getAddress());
-		
+
 		emailHeader.setEmailText(emailMessage.getUniqueBody().getContent());
 
 		return emailHeader;
 	}
 
 	private Date convertStringToDate(String dateTime) {
-		
+
 		DateFormat parser = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss");
-        parser.setTimeZone(TimeZone.getTimeZone("UTC"));
-        Date parsed=null;
+		parser.setTimeZone(TimeZone.getTimeZone("UTC"));
+		Date parsed = null;
 		try {
 			parsed = parser.parse(dateTime);
 		} catch (ParseException e) {
-			log.error("Error while parsing the date : "+e);
+			log.error("Error while parsing the date : " + e);
 
 		}
-        return parsed;
+		return parsed;
 	}
-
 
 	/**
 	 * Method to get the date range filter criteria for filtering the emails
+	 * 
 	 * @param fromDate
 	 * @param toDate
 	 * @return
@@ -519,13 +532,12 @@ public class OCMSExchangeReader implements IEmailReader {
 		return unreadFilter;
 	}
 
-	
 	private EmailPreference getMailPreferences(Email email) {
-		
+
 		EmailPreference emailPreferences = null;
-		
+
 		Gson gson = new Gson();
-		
+
 		EmailPreferenceMap emailPreferencesMap = email.getObjEmailPreferences();
 
 		try {
@@ -537,68 +549,71 @@ public class OCMSExchangeReader implements IEmailReader {
 			}
 
 		} catch (Exception e) {
-			
+
 			log.error("Email preferences string is not as expected with error:" + e.getMessage());
 
 		}
 		return emailPreferences;
 	}
-	
+
 	/**
 	 * This method will be used to fetch the Authentication tokens required to read
 	 * mails from the Microsoft exchange server over cloud
+	 * 
 	 * @param username
 	 * @param password
 	 * @return AuthenticationResult
 	 * @throws BrillerBatchConnectionException
 	 */
-	 private AuthenticationResult authenticateAndAcquireTokens(OCMSExchangeConnectionParams connectionParams) 
-			 															throws BrillerBatchConnectionException {
-		 
-	        AuthenticationContext context = null;
-	        
-	        AuthenticationResult result = null;
-	        
-	        ExecutorService service = null;
-	        
-	        try {
-	            service = Executors.newFixedThreadPool(1);	
-	            
-	            context = new AuthenticationContext(connectionParams.getExchangeServerURL(), false, service);
-	            
-	            ClientCredential credential = 
-	            			new ClientCredential(connectionParams.getClientId(), connectionParams.getSecretKey());
-	            
-	            Future<AuthenticationResult> future = 
-								context.acquireToken(connectionParams.getGraphApiURL(),credential,null);
-	            
-	            result = future.get(timeOutInSeconds, TimeUnit.SECONDS);
-	            
-	            if (null==result) {
-		            throw new BrillerBatchConnectionException("Failed to Authenticate the admin user "
-		            								+ "and hence cannot acquire tokens.",ErrorCodes.AUTHENTICATION_ERROR);
-		            
-		        }
-	            
-	        }catch(MalformedURLException mu) {
-	        	
-	        	throw new BrillerBatchConnectionException("Incorrect URL for the Exchange Server. "
-	        								+ "Could not acquire access tokens",mu,ErrorCodes.INCORRECT_CONNECTION_URL);
-	        }
-	        catch(InterruptedException | ExecutionException ie) {
-	        	
-	        	throw new BrillerBatchConnectionException("Error while fetching the access tokens."
-	        										+ "Could not acquire access tokens",ie,ErrorCodes.AUTHENTICATION_ERROR);
-	        } catch (TimeoutException te) {
-	        	
-	        	throw new BrillerBatchConnectionException("Error!!! Timed out while fetching the access tokens."
-													+ "Could not acquire access tokens",te,ErrorCodes.REQUEST_TIME_OUT_ERROR);
-			}
-	        finally {
-	        	
-	            service.shutdown();
-	        }
+	private AuthenticationResult authenticateAndAcquireTokens(OCMSExchangeConnectionParams connectionParams)
+			throws BrillerBatchConnectionException {
 
-	        return result;
-	    }
+		AuthenticationContext context = null;
+
+		AuthenticationResult result = null;
+
+		ExecutorService service = null;
+
+		try {
+			service = Executors.newFixedThreadPool(1);
+
+			context = new AuthenticationContext(connectionParams.getExchangeServerURL(), false, service);
+
+			ClientCredential credential = new ClientCredential(connectionParams.getClientId(),
+					connectionParams.getSecretKey());
+
+			Future<AuthenticationResult> future = context.acquireToken(connectionParams.getGraphApiURL(), credential,
+					null);
+
+			result = future.get(timeOutInSeconds, TimeUnit.SECONDS);
+
+			if (null == result) {
+				throw new BrillerBatchConnectionException(
+						"Failed to Authenticate the admin user " + "and hence cannot acquire tokens.",
+						ErrorCodes.AUTHENTICATION_ERROR);
+
+			}
+
+		} catch (MalformedURLException mu) {
+
+			throw new BrillerBatchConnectionException(
+					"Incorrect URL for the Exchange Server. " + "Could not acquire access tokens", mu,
+					ErrorCodes.INCORRECT_CONNECTION_URL);
+		} catch (InterruptedException | ExecutionException ie) {
+
+			throw new BrillerBatchConnectionException(
+					"Error while fetching the access tokens." + "Could not acquire access tokens", ie,
+					ErrorCodes.AUTHENTICATION_ERROR);
+		} catch (TimeoutException te) {
+
+			throw new BrillerBatchConnectionException(
+					"Error!!! Timed out while fetching the access tokens." + "Could not acquire access tokens", te,
+					ErrorCodes.REQUEST_TIME_OUT_ERROR);
+		} finally {
+
+			service.shutdown();
+		}
+
+		return result;
+	}
 }

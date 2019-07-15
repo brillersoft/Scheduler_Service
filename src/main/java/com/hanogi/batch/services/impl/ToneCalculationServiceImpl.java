@@ -98,7 +98,7 @@ public class ToneCalculationServiceImpl implements IToneCalcultionService {
 					
 					int size = mailThreads.size();
 
-					for (EmailHeader mailThread : mailThreads) { 
+					for (EmailHeader mailThread : mailThreads) {
 
 						threadIndex++;
 						
