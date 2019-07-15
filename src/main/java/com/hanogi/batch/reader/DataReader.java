@@ -59,17 +59,16 @@ public class DataReader implements IDataReader {
 
 	@Autowired
 	private IBatchService batchService;
-	
+
 	@Autowired
 	private IToneCalcultionService toneCalculationService;
-	
+
 	@Autowired
 	private ISummaryCalculationService summaryCalculationService;
-	
+
 	@Autowired
 	@Qualifier("cacheErrorMap")
-	private Map<String,String> cacheErrorMap;
-
+	private Map<String, String> cacheErrorMap;
 
 	Long startTimeInMillSec = 0l;
 
@@ -103,94 +102,111 @@ public class DataReader implements IDataReader {
 		}
 
 		Map<String, Set<EmailHeader>> mailThreadsMap = beginToneProcessing(emailProcessingStatusMap, cacheInstance);
-		
+
 		boolean successulfulyCompleted = checkCacheForBatchCompletion(cacheInstance);
-		
+
 		ExecutionStatusEnum batchExecutionStatus = ExecutionStatusEnum.failure;
-		
-		logger.info("Checking for successful completion of batch : "+ successulfulyCompleted);
-		
-		if(successulfulyCompleted) {
-		 			
-			 batchExecutionStatus = hasEmailReadersContainsErrors(emailProcessingStatusMap)
-					? ExecutionStatusEnum.failure
+
+		logger.info("Checking for successful completion of batch : " + successulfulyCompleted);
+
+		if (successulfulyCompleted) {
+
+			batchExecutionStatus = hasEmailReadersContainsErrors(emailProcessingStatusMap) ? ExecutionStatusEnum.failure
 					: ExecutionStatusEnum.Complete;
-			
-			
+
 			toneCalculationService.executeToneCalculation(mailThreadsMap);
 		}
-		
-		perfomSummaryCalculation(batchRunDetails,emailProcessingStatusMap);
+
+		perfomSummaryCalculation(batchRunDetails, emailProcessingStatusMap);
 		logger.info("Start updating the batch Execution status");
 		batchService.updateBatchExecutionStatus(batchRunDetails, batchExecutionStatus);
-		
-		performCleanUp(cacheInstance,emailProcessingStatusMap);
+
+		performCleanUp(cacheInstance, emailProcessingStatusMap);
 
 	}
 
-	public  void perfomSummaryCalculation(BatchRunDetails batchRunDetails, Map<String, ExecutionStatusEnum> emailProcessingStatusMap) {
-		
-		//Date batchDate = batchRunDetails.getFromDate();
-		logger.info("Start performing summary calculations");
+	public void perfomSummaryCalculation(BatchRunDetails batchRunDetails,
+			Map<String, ExecutionStatusEnum> emailProcessingStatusMap) {
 
-		Date fromDate = getDate("2018-01-01 00:00:00");
-		
-		List<EmailHeader> lstEmailDetails = summaryCalculationService.fetchMailDetailsByDate(fromDate);
-		
-		List<AggregatedTone> lstAggregatedTones = summaryCalculationService.getAggregatedTones(lstEmailDetails);
-		
-		Map<String, Integer> retailClientMap = summaryCalculationService.getAllRetailClients();
-		
-		Map<String, String> mailThreadToneMap = new HashMap<>();
-		
-		for (AggregatedTone aggTone : lstAggregatedTones) {
-			
-			String baseTone = aggTone.getAggregatedToneScore()<0.0? BaseTones.NEGATIVE.name():BaseTones.POSITIVE.name();
-			
-			mailThreadToneMap.put(aggTone.getMailThreadName(), baseTone);
+		// Date batchDate = batchRunDetails.getFromDate();
+
+		try {
+			Date fromDate = getDate("2018-01-01 00:00:00");
+
+			List<EmailHeader> lstEmailDetails = summaryCalculationService.fetchMailDetailsByDate(fromDate);
+
+			List<AggregatedTone> lstAggregatedTones = summaryCalculationService.getAggregatedTones(lstEmailDetails);
+
+			Map<String, Integer> retailClientMap = summaryCalculationService.getAllRetailClients();
+
+			Map<String, String> mailThreadToneMap = new HashMap<>();
+
+			for (AggregatedTone aggTone : lstAggregatedTones) {
+
+				try {
+					if (aggTone != null) {
+
+						Double aggregatedToneScore = aggTone.getAggregatedToneScore();
+
+						String baseTone = BaseTones.POSITIVE.name();
+
+						if (aggregatedToneScore != null) {
+							baseTone = aggregatedToneScore < 0.0 ? BaseTones.NEGATIVE.name()
+									: BaseTones.POSITIVE.name();
+
+						}
+
+						mailThreadToneMap.put(aggTone.getMailThreadName(), baseTone);
+					}
+				} catch (Exception e) {
+					logger.error("Error while collecting base tone:" + e.getMessage());
+				}
+			}
+
+			for (String emailId : emailProcessingStatusMap.keySet()) {
+
+				summaryCalculationService.executeSummaryCalculation(emailId, lstEmailDetails, mailThreadToneMap,
+						retailClientMap, fromDate);
+
+			}
+		} catch (Exception e) {
+			logger.error("Error while calculating performance summary:" + e.getMessage());
 		}
-		
-		for (String emailId : emailProcessingStatusMap.keySet()) {
-			
-			summaryCalculationService.executeSummaryCalculation(emailId,lstEmailDetails,
-													mailThreadToneMap,retailClientMap,fromDate);
-			
-		}
-		
+
 	}
-	
+
 	public Date getDate(String batchDate) {
-		
+
 		DateFormat parser = new SimpleDateFormat("yyyy-MM-dd");
-		
-        parser.setTimeZone(TimeZone.getTimeZone("UTC"));
-        
-        Date parsed=null;
+
+		parser.setTimeZone(TimeZone.getTimeZone("UTC"));
+
+		Date parsed = null;
 		try {
 			parsed = parser.parse(batchDate);
 		} catch (ParseException e) {
 			e.printStackTrace();
 
 		}
-		
+
 		return parsed;
 	}
 
 	private void performCleanUp(Cache cacheInstance, Map<String, ExecutionStatusEnum> emailProcessingStatusMap) {
-		
+
 		logger.info("Start performing the clean up activity after batch completion");
-		
+
 		cacheInstance.removeAll();
-		
+
 		cacheErrorMap.clear();
-		
+
 		emailProcessingStatusMap.clear();
-		
-		if(!emailDataProcessingQueue.isEmpty()) {
-			
+
+		if (!emailDataProcessingQueue.isEmpty()) {
+
 			emailDataProcessingQueue.clear();
 		}
-		
+
 		logger.info("Finshed performing the clean up activity after batch completion");
 	}
 
@@ -222,10 +238,10 @@ public class DataReader implements IDataReader {
 
 		}
 	}
-	
-	public Map<String, Set<EmailHeader>> beginToneProcessing
-						(Map<String, ExecutionStatusEnum> emailProcessingStatusMap, Cache cacheInstance) {
-		
+
+	public Map<String, Set<EmailHeader>> beginToneProcessing(Map<String, ExecutionStatusEnum> emailProcessingStatusMap,
+			Cache cacheInstance) {
+
 		List<EmailMessageData> listEmailMessage = new ArrayList<>();
 
 		Map<String, Set<EmailHeader>> mailThreadsMap = new HashMap<>();
@@ -281,34 +297,33 @@ public class DataReader implements IDataReader {
 			emailToneReader.readTone(listEmailMessage, cacheInstance);
 
 		}
-		
+
 		return mailThreadsMap;
 
 	}
-	
-	
+
 	@SuppressWarnings("static-access")
 	public boolean checkCacheForBatchCompletion(Cache cacheInstance) {
 
 		boolean hasSuccessfullyProcessed = false;
 
 		boolean isProcessing = true;
-		
-		int exceptionCount=0;
-		
+
+		int exceptionCount = 0;
+
 		boolean containsOnlyErrorRecords = false;
-		
-		int size=0;
+
+		int size = 0;
 
 		while (isProcessing) {
 
 			try {
 				size = cacheInstance.getSize();
-				
+
 				Thread.currentThread().sleep(30000);
 
 				isProcessing = cacheInstance.isValueInCache(ExecutionStatusEnum.Inprogress);
-				
+
 				if (size == cacheInstance.getSize() && containsOnlyErrorRecords) {
 
 					isProcessing = false;
@@ -327,14 +342,13 @@ public class DataReader implements IDataReader {
 						ExecutionStatusEnum messageStatus = (ExecutionStatusEnum) element.getObjectValue();
 
 						if (ExecutionStatusEnum.Inprogress.equals(messageStatus)) {
-							
-							
+
 							if (!cacheErrorMap.containsKey(key)) {
 								containsOnlyErrorRecords = false;
 								break;
 
-							}else {
-								containsOnlyErrorRecords=true;
+							} else {
+								containsOnlyErrorRecords = true;
 							}
 
 						}
@@ -343,24 +357,24 @@ public class DataReader implements IDataReader {
 
 				} // if loop Ends
 				else {
-					
+
 					Thread.currentThread().sleep(30000);
 
 					isProcessing = cacheInstance.isValueInCache(ExecutionStatusEnum.Inprogress);
 
-					if(!isProcessing) {
+					if (!isProcessing) {
 						hasSuccessfullyProcessed = true;
 					}
 				}
 
 			} catch (Exception e) {
-				
-				logger.error("Error while checkin the cache for batch completion ",e);
-				
+
+				logger.error("Error while checkin the cache for batch completion ", e);
+
 				exceptionCount++;
-				
-				if(exceptionCount>5) {
-					isProcessing=false;
+
+				if (exceptionCount > 5) {
+					isProcessing = false;
 					hasSuccessfullyProcessed = false;
 				}
 

@@ -37,7 +37,7 @@ public class RetailClient extends AuditFields<String> {
 	}
 
 	public String getStatus() {
-		return status; 
+		return status;
 	}
 
 	public void setStatus(String status) {

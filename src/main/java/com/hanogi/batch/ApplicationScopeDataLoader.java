@@ -30,7 +30,7 @@ public class ApplicationScopeDataLoader {
 
 		for (EmailServiceProviders serviceProviders : EmailServiceProviders.values()) {
 
-			switch (serviceProviders) { 
+			switch (serviceProviders) {
 
 			case MicrosoftExchange:
 
@@ -47,7 +47,7 @@ public class ApplicationScopeDataLoader {
 				break;
 			}
 		}
- 
+
 	}
 
 }

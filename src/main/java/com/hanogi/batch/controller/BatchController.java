@@ -89,7 +89,7 @@ public class BatchController {
 	 * @throws Exception
 	 */
 	@GetMapping("/runbatch/email")
-	@ApiOperation(value = "Running Batch job for a particular Email-Id", response = String.class, consumes = "emailId on which batch should run")
+	@ApiOperation(value = "Running Batch job for a particular Email-Id", response = String.class, consumes = "emailId on whuc batch should run")
 	public String runBatchforEmail(@RequestParam List<String> emailId) throws Exception {
 
 		log.info("Inside runBatchforEmail");

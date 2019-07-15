@@ -32,7 +32,7 @@ public class CronJob extends QuartzJobBean {
 
 	@Autowired
 	private SchedulerRepository schedulerRepo;
- 
+
 	@Override
 	protected void executeInternal(JobExecutionContext context) throws JobExecutionException {
 
