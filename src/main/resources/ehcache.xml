@@ -1,0 +1,36 @@
+<ehcache xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:noNamespaceSchemaLocation="ehcache.xsd" 
+	updateCheck="true"
+	monitoring="autodetect" 
+	dynamicConfig="true">
+
+	<!-- <diskStore path="java.io.tmpdir" /> -->
+	<diskStore path="user.dir" />
+	
+	<cache name="historyBatchSchedule" 
+		maxEntriesLocalHeap="25000"
+		maxEntriesLocalDisk="1000" 
+		eternal="false" 
+		diskSpoolBufferSizeMB="20"
+		timeToIdleSeconds="3000" 
+		timeToLiveSeconds="6000"
+		memoryStoreEvictionPolicy="FIFO" 
+		transactionalMode="off">
+		<persistence strategy="localTempSwap" />
+		
+	</cache>
+	
+	<cache name="concurrentBatchScheduleCache" 
+		maxEntriesLocalHeap="25000"
+		eternal="true" 
+		diskSpoolBufferSizeMB="20"
+		timeToIdleSeconds="3000" 
+		timeToLiveSeconds="6000"
+		memoryStoreEvictionPolicy="FIFO" 
+		transactionalMode="off">
+		<persistence strategy="localTempSwap" />
+		
+	</cache>
+	
+
+</ehcache>
